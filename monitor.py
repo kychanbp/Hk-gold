@@ -71,10 +71,22 @@ def _fetch_with_playwright() -> list[ScraperResult]:
 
     results = []
     with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=True,
-            args=["--no-sandbox", "--disable-gpu"],
-        )
+        launch_kwargs = {
+            "headless": True,
+            "args": ["--no-sandbox", "--disable-gpu"],
+        }
+        # Auto-detect Chrome binary if default path fails
+        import shutil
+        for candidate in [
+            "/opt/pw-browsers/chromium-1194/chrome-linux/chrome",
+            shutil.which("chromium-browser"),
+            shutil.which("chromium"),
+            shutil.which("google-chrome"),
+        ]:
+            if candidate:
+                launch_kwargs["executable_path"] = candidate
+                break
+        browser = p.chromium.launch(**launch_kwargs)
         page = browser.new_page(
             user_agent=(
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
