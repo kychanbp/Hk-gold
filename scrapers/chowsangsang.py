@@ -2,6 +2,7 @@
 
 Gold price page: https://www.chowsangsang.com/zh-hk/gold-price
 Also available: https://www.chowsangsang.com/en/gold-price
+Possible API: https://ws.chowsangsang.com/goldrate
 
 The page displays gold prices in a table format:
 - 足金飾品 (999.9 Gold Jewellery): sell/buy per tael
@@ -10,6 +11,8 @@ The page displays gold prices in a table format:
 
 Prices are typically per tael (兩) in HKD.
 """
+
+import json
 
 import requests
 from bs4 import BeautifulSoup
@@ -22,6 +25,7 @@ class ChowSangSangScraper(GoldPriceScraper):
     name_zh = "周生生"
     url = "https://www.chowsangsang.com/zh-hk/gold-price"
     url_en = "https://www.chowsangsang.com/en/gold-price"
+    api_url = "https://ws.chowsangsang.com/goldrate"
 
     HEADERS = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -29,14 +33,68 @@ class ChowSangSangScraper(GoldPriceScraper):
         "Accept-Language": "zh-HK,zh;q=0.9,en;q=0.8",
     }
 
+    API_HEADERS = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://www.chowsangsang.com/",
+        "Origin": "https://www.chowsangsang.com",
+    }
+
     def scrape_with_requests(self) -> ScraperResult:
         result = self._make_result()
+
+        # Try API endpoint first (faster, more reliable if it works)
+        try:
+            resp = requests.get(self.api_url, headers=self.API_HEADERS, timeout=10)
+            if resp.status_code == 200:
+                parsed = self._parse_api_response(resp.text, result)
+                if parsed.prices:
+                    return parsed
+        except Exception:
+            pass
+
+        # Fallback to HTML scraping
         try:
             resp = requests.get(self.url, headers=self.HEADERS, timeout=15)
             resp.raise_for_status()
             result = self._parse_html(resp.text, result)
         except Exception as e:
             result.error = str(e)
+        return result
+
+    def _parse_api_response(self, text: str, result: ScraperResult) -> ScraperResult:
+        """Parse JSON response from ws.chowsangsang.com/goldrate API."""
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            return result
+
+        # The API structure is not fully known; try common patterns
+        if isinstance(data, dict):
+            # Look for gold rate fields
+            for key_pattern, gold_type in [
+                (["goldJewellery", "gold_jewellery", "ornament", "足金", "飾金"], "飾金 999.9"),
+                (["goldGranule", "gold_granule", "goldBar", "gold_bar", "金粒"], "金粒"),
+            ]:
+                for key in key_pattern:
+                    if key in data:
+                        item = data[key]
+                        gp = GoldPrice(type=gold_type)
+                        if isinstance(item, dict):
+                            gp.sell_per_tael = self._parse_price(str(item.get("sell", item.get("selling", ""))))
+                            gp.buy_per_tael = self._parse_price(str(item.get("buy", item.get("buying", ""))))
+                            gp.sell_per_gram = self._parse_price(str(item.get("sellPerGram", item.get("sell_gram", ""))))
+                            gp.buy_per_gram = self._parse_price(str(item.get("buyPerGram", item.get("buy_gram", ""))))
+                        if gp.sell_per_tael or gp.buy_per_tael:
+                            result.prices.append(gp)
+                        break
+
+            # Try extracting update time
+            for time_key in ["lastUpdate", "last_update", "updateTime", "timestamp"]:
+                if time_key in data:
+                    result.last_updated = str(data[time_key])
+                    break
+
         return result
 
     def scrape_with_playwright(self, page) -> ScraperResult:

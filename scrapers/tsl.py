@@ -1,7 +1,8 @@
 """TSL Jewellery (謝瑞麟) gold price scraper.
 
 Gold price page: https://www.tslj.com/zh-hk/
-The TSL website shows gold bar/jewellery prices on their homepage or a dedicated gold price section.
+Note: TSL's site is a fully JS-rendered SPA, making it harder to scrape.
+Falls back to aggregator sites (hkgoldprice.com) if direct scraping fails.
 
 TSL displays:
 - 飾金價 (Gold Jewellery): per tael
@@ -13,6 +14,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from .base import GoldPrice, GoldPriceScraper, ScraperResult
+from .aggregator import fetch_from_hkgoldprice, fetch_from_aggregator_playwright
 
 
 class TSLScraper(GoldPriceScraper):
@@ -29,6 +31,8 @@ class TSLScraper(GoldPriceScraper):
 
     def scrape_with_requests(self) -> ScraperResult:
         result = self._make_result()
+
+        # Try direct scraping first
         for url in [self.url, self.url_en]:
             try:
                 resp = requests.get(url, headers=self.HEADERS, timeout=15)
@@ -38,10 +42,19 @@ class TSLScraper(GoldPriceScraper):
                     return result
             except Exception as e:
                 result.error = str(e)
+
+        # Fallback to aggregator site
+        agg_result = fetch_from_hkgoldprice(self.name_zh)
+        if agg_result.prices:
+            agg_result.retailer = result.retailer
+            return agg_result
+
         return result
 
     def scrape_with_playwright(self, page) -> ScraperResult:
         result = self._make_result()
+
+        # Try direct scraping first
         for url in [self.url, self.url_en]:
             try:
                 page.goto(url, timeout=30000)
@@ -56,6 +69,13 @@ class TSLScraper(GoldPriceScraper):
                     return result
             except Exception as e:
                 result.error = str(e)
+
+        # Fallback to aggregator via playwright
+        agg_result = fetch_from_aggregator_playwright(page, self.name_zh)
+        if agg_result.prices:
+            agg_result.retailer = result.retailer
+            return agg_result
+
         return result
 
     def _parse_html(self, html: str, result: ScraperResult) -> ScraperResult:
